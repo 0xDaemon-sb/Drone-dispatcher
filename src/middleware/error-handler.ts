@@ -1,6 +1,8 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 
+import { HttpError } from "../lib/http-error.js";
+
 type ErrorResponse = {
   error: {
     code: string;
@@ -16,6 +18,13 @@ const isMalformedJsonError = (error: unknown): error is SyntaxError & { status: 
   "body" in error;
 
 export const errorHandler: ErrorRequestHandler = (error, request, response, _next) => {
+  if (error instanceof HttpError) {
+    response.status(error.status).json({
+      error: { code: error.code, message: error.message },
+    } satisfies ErrorResponse);
+    return;
+  }
+
   if (error instanceof ZodError) {
     const body: ErrorResponse = {
       error: {

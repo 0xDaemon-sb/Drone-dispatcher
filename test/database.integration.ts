@@ -1,45 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { describe, expect, it } from "@jest/globals";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "@jest/globals";
-import { DataSource } from "typeorm";
-
-import { createDataSource } from "../src/database/data-source.js";
 import { batteryAuditSchema } from "../src/database/entities/battery-audit.js";
 import { droneSchema } from "../src/database/entities/drone.js";
 import { medicationSchema } from "../src/database/entities/medication.js";
 import { seedDatabase } from "../src/database/seed-data.js";
-
-// A dedicated temporary database keeps the development fleet untouched.
-const adminUrl = process.env.TEST_DATABASE_URL;
-if (!adminUrl) throw new Error("Set TEST_DATABASE_URL to a local PostgreSQL connection with CREATEDB permission.");
-
-const databaseName = `blusalt_test_${randomUUID().replaceAll("-", "")}`;
-const admin = new DataSource({ type: "postgres", url: adminUrl, connectTimeoutMS: 5_000 });
-const testUrl = new URL(adminUrl);
-testUrl.pathname = `/${databaseName}`;
-const database = createDataSource(testUrl.toString());
-let created = false;
+import { useTestDatabase } from "./helpers/database.js";
 
 describe("PostgreSQL persistence", () => {
-  beforeAll(async () => {
-    await admin.initialize();
-    await admin.query(`CREATE DATABASE "${databaseName}"`);
-    created = true;
-    await database.initialize();
-    await database.runMigrations();
-  }, 20_000);
-
-  afterAll(async () => {
-    if (database.isInitialized) await database.destroy();
-    if (admin.isInitialized) {
-      if (created) await admin.query(`DROP DATABASE "${databaseName}" WITH (FORCE)`);
-      await admin.destroy();
-    }
-  });
-
-  beforeEach(async () => {
-    await database.query('TRUNCATE "battery_audits", "medications", "drones"');
-  });
+  const database = useTestDatabase();
 
   it("applies migrations once and keeps entity metadata aligned with the schema", async () => {
     expect(await database.showMigrations()).toBe(false);
