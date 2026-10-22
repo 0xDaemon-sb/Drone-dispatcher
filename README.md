@@ -57,12 +57,12 @@ The API image uses a multi-stage build and runs as the unprivileged `node` user.
 ```bash
 npm run db:migrate       # Apply pending migrations
 npm run db:seed          # Insert missing fixtures, preserving existing records
-npm run db:revert        # Undo the latest migration (removes its tables and data)
+npm run db:revert        # Undo the latest migration
 ```
 
 After `npm run build`, the compiled equivalents are `npm run db:migrate:production` and `npm run db:seed:production`. Automatic schema synchronization is disabled; schema changes must be captured in migrations.
 
-The seed inserts 10 IDLE drones (`BLU-001` through `BLU-010`), covering all models and battery levels including 24% and 25%, plus three unassigned medication items. Stable UUIDs and conflict-safe inserts make reruns preserve changed batteries and loaded items. The medication images are small PNG placeholders for fixtures; real medication-case pictures belong in client input. Audit history starts empty and will be populated by the scheduler.
+The seed inserts 10 IDLE drones (`BLU-001` through `BLU-010`), covering all models and battery levels including 24% and 25%, plus three unassigned medication items. Stable UUIDs and conflict-safe inserts make reruns preserve changed batteries and loaded items. Medication `image` values are HTTP/HTTPS URLs stored as text. The seed uses illustrative `example.com` URLs, not hosted pictures; real medication-case image URLs belong in client input. A data migration converts the previous base64 seed placeholders while preserving custom images. Audit history starts empty and will be populated by the scheduler.
 
 Weights use integer grams; battery readings use integer percentages. PostgreSQL enforces serial uniqueness and length, model/state enums, positive weights, a maximum drone limit of 500g, battery ranges, medication name/code formats, and valid drone references. A LOADING drone must have at least 25% battery. The aggregate payload weight rule will be enforced transactionally by the loading service in the next slice.
 
