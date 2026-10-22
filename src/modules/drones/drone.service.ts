@@ -7,6 +7,7 @@ import { HttpError } from "../../lib/http-error.js";
 import type { BatteryAuditQuery, MedicationInput, RegisterDroneInput } from "./drone.schemas.js";
 
 const loadableStates: DroneState[] = ["IDLE", "LOADING", "LOADED"];
+const minimumBatteryCapacity = 25;
 
 export const createDroneService = (database: DataSource) => {
   const drones = database.getRepository(droneSchema);
@@ -65,17 +66,30 @@ export const createDroneService = (database: DataSource) => {
           lock: { mode: "pessimistic_write" },
         });
         if (!drone) throw new HttpError(404, "DRONE_NOT_FOUND", "Drone not found.");
-        if (!loadableStates.includes(drone.state)) {
-          throw new HttpError(409, "DRONE_NOT_LOADABLE", "The drone cannot be loaded in its current state.");
-        }
-        if (drone.batteryCapacity < 25) {
-          throw new HttpError(409, "INSUFFICIENT_BATTERY", "The drone needs at least 25% battery to load medications.");
-        }
 
         const loadedWeight = await transactionMedications.sum("weight", { droneId: drone.id }) ?? 0;
         const incomingWeight = items.reduce((total, item) => total + item.weight, 0);
+        const details = {
+          serialNumber: drone.serialNumber,
+          state: drone.state,
+          allowedStates: loadableStates,
+          batteryCapacity: drone.batteryCapacity,
+          minimumBatteryCapacity,
+          weightLimit: drone.weightLimit,
+          loadedWeight,
+          remainingCapacity: Math.max(0, drone.weightLimit - loadedWeight),
+          requestedWeight: incomingWeight,
+        };
+
+        if (!loadableStates.includes(drone.state)) {
+          throw new HttpError(409, "DRONE_NOT_LOADABLE", "The drone cannot be loaded in its current state.", details);
+        }
+        if (drone.batteryCapacity < minimumBatteryCapacity) {
+          throw new HttpError(409, "INSUFFICIENT_BATTERY", "The drone needs at least 25% battery to load medications.", details);
+        }
+
         if (loadedWeight + incomingWeight > drone.weightLimit) {
-          throw new HttpError(409, "WEIGHT_LIMIT_EXCEEDED", "The medication batch exceeds the drone's remaining capacity.");
+          throw new HttpError(409, "WEIGHT_LIMIT_EXCEEDED", "The medication batch exceeds the drone's remaining capacity.", details);
         }
 
         const loaded = await transactionMedications.save(items.map((item) => ({ ...item, droneId: drone.id })));
@@ -87,7 +101,7 @@ export const createDroneService = (database: DataSource) => {
     async getAvailable() {
       return drones.createQueryBuilder("drone")
         .where("drone.state IN (:...states)", { states: loadableStates })
-        .andWhere("drone.batteryCapacity >= :minimumBattery", { minimumBattery: 25 })
+        .andWhere("drone.batteryCapacity >= :minimumBattery", { minimumBattery: minimumBatteryCapacity })
         .andWhere((query) => {
           const loadedWeight = query.subQuery()
             .select("COALESCE(SUM(medication.weight), 0)")

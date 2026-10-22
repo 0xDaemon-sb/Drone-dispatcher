@@ -75,6 +75,8 @@ Loading uses a PostgreSQL transaction at `READ COMMITTED` isolation and locks th
 
 Loading returns `404 DRONE_NOT_FOUND` for an unknown drone, `409 DRONE_NOT_LOADABLE` for an ineligible state, `409 INSUFFICIENT_BATTERY` for battery below 25%, and `409 WEIGHT_LIMIT_EXCEEDED` for insufficient remaining capacity. Invalid batches return `400 VALIDATION_ERROR` before any database writes.
 
+Every loading conflict includes an `error.details` object with `serialNumber`, current `state`, `allowedStates`, current `batteryCapacity`, `minimumBatteryCapacity`, `weightLimit`, `loadedWeight`, `remainingCapacity`, and `requestedWeight`. Battery values are percentages; all weights/capacities are grams. Remaining capacity is clamped to zero if existing data is already overweight. These values are read while holding the drone row lock and describe the failed attempt; later requests may change them. Validation errors continue to use an array of issues in `error.details`.
+
 ## Battery audits
 
 The API starts a background task after it connects to PostgreSQL and opens its HTTP port. Set `BATTERY_AUDIT_INTERVAL_MS` to an integer from 1,000 to 2,147,483,647 milliseconds; the default is 60,000 (one minute). Compose forwards this setting from `.env`. The first audit runs after one interval, and later ticks are skipped while a prior audit is still running. This overlap guard applies within one API process; the local stack runs a single API instance.

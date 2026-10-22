@@ -41,6 +41,23 @@ const loadedExample = {
   droneId: droneExample.id, createdAt: "2026-10-22T10:00:00.000Z",
 };
 
+const loadingConflictDetailsSchema = z.strictObject({
+  serialNumber: droneParamsSchema.shape.serialNumber,
+  state: z.enum(droneStates),
+  allowedStates: z.array(z.enum(droneStates)),
+  batteryCapacity: registerDroneSchema.shape.batteryCapacity,
+  minimumBatteryCapacity: z.literal(25),
+  weightLimit: registerDroneSchema.shape.weightLimit,
+  loadedWeight: z.number().int().min(0).describe("Current payload in grams."),
+  remainingCapacity: z.number().int().min(0).describe("Remaining payload capacity in grams, clamped to zero."),
+  requestedWeight: z.number().int().positive().describe("Total requested batch weight in grams."),
+});
+const loadingConflictDetailsExample = {
+  serialNumber: "BLU-001", state: "LOADED", allowedStates: ["IDLE", "LOADING", "LOADED"],
+  batteryCapacity: 100, minimumBatteryCapacity: 25,
+  weightLimit: 200, loadedWeight: 150, remainingCapacity: 50, requestedWeight: 100,
+};
+
 export const openApiDocument = {
   openapi: "3.0.3",
   info: {
@@ -73,7 +90,17 @@ export const openApiDocument = {
         state: z.enum(droneStates), checkedAt: z.iso.datetime(),
       })),
       Error: toSchema(z.strictObject({
-        error: z.strictObject({ code: z.string(), message: z.string(), details: z.array(z.unknown()).optional() }),
+        error: z.strictObject({
+          code: z.string(), message: z.string(),
+          details: z.union([z.array(z.unknown()), z.record(z.string(), z.unknown())]).optional(),
+        }),
+      })),
+      LoadingConflictDetails: toSchema(loadingConflictDetailsSchema),
+      LoadingConflict: toSchema(z.strictObject({
+        error: z.strictObject({
+          code: z.enum(["DRONE_NOT_LOADABLE", "INSUFFICIENT_BATTERY", "WEIGHT_LIMIT_EXCEEDED"]),
+          message: z.string(), details: loadingConflictDetailsSchema,
+        }),
       })),
       Health: toSchema(z.strictObject({ status: z.literal("ok") })),
     },
@@ -90,14 +117,23 @@ export const openApiDocument = {
       InternalError: errorResponse("Unexpected server failure. Failed loading batches are rolled back.", "INTERNAL_SERVER_ERROR", "An unexpected error occurred."),
       DuplicateDrone: errorResponse("Serial numbers are unique, including during concurrent registrations.", "DRONE_ALREADY_EXISTS", "A drone with this serial number already exists."),
       LoadingConflict: {
-        ...jsonResponse("DRONE_NOT_LOADABLE: state is ineligible; INSUFFICIENT_BATTERY: battery is below 25%; WEIGHT_LIMIT_EXCEEDED: existing payload plus batch exceeds capacity. Nothing is added on failure.", ref("Error")),
+        ...jsonResponse("DRONE_NOT_LOADABLE: state is ineligible; INSUFFICIENT_BATTERY: battery is below 25%; WEIGHT_LIMIT_EXCEEDED: existing payload plus batch exceeds capacity. Details describe the drone and batch while holding the row lock; they may change after the response. Weights are grams, battery values are percentages. Nothing is added on failure.", ref("LoadingConflict")),
         content: {
           "application/json": {
-            schema: ref("Error"),
+            schema: ref("LoadingConflict"),
             examples: {
-              state: { value: { error: { code: "DRONE_NOT_LOADABLE", message: "The drone cannot be loaded in its current state." } } },
-              battery: { value: { error: { code: "INSUFFICIENT_BATTERY", message: "The drone needs at least 25% battery to load medications." } } },
-              weight: { value: { error: { code: "WEIGHT_LIMIT_EXCEEDED", message: "The medication batch exceeds the drone's remaining capacity." } } },
+              state: { value: { error: {
+                code: "DRONE_NOT_LOADABLE", message: "The drone cannot be loaded in its current state.",
+                details: { ...loadingConflictDetailsExample, state: "DELIVERING" },
+              } } },
+              battery: { value: { error: {
+                code: "INSUFFICIENT_BATTERY", message: "The drone needs at least 25% battery to load medications.",
+                details: { ...loadingConflictDetailsExample, batteryCapacity: 24 },
+              } } },
+              weight: { value: { error: {
+                code: "WEIGHT_LIMIT_EXCEEDED", message: "The medication batch exceeds the drone's remaining capacity.",
+                details: loadingConflictDetailsExample,
+              } } },
             },
           },
         },

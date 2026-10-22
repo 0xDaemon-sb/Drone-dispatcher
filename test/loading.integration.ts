@@ -61,10 +61,16 @@ describe("Medication loading", () => {
 
   it.each([0, 24])("rejects battery level %i without changing the drone or its payload", async (batteryCapacity) => {
     const drone = await drones.save({ ...droneInput, batteryCapacity });
+    await medications.insert({ ...medication, droneId: drone.id, weight: 50 });
     const response = await request(app).post(endpoint).send({ medications: [medication] });
     expect(response.status).toBe(409);
     expect(response.body.error.code).toBe("INSUFFICIENT_BATTERY");
-    expect(await medications.count()).toBe(0);
+    expect(response.body.error.details).toEqual({
+      serialNumber: "LOAD-001", state: "IDLE", allowedStates: ["IDLE", "LOADING", "LOADED"],
+      batteryCapacity, minimumBatteryCapacity: 25,
+      weightLimit: 500, loadedWeight: 50, remainingCapacity: 450, requestedWeight: 100,
+    });
+    expect(await medications.count()).toBe(1);
     expect(await drones.findOneByOrFail({ id: drone.id })).toEqual(drone);
   });
 
@@ -73,6 +79,11 @@ describe("Medication loading", () => {
     const response = await request(app).post(endpoint).send({ medications: [medication] });
     expect(response.status).toBe(409);
     expect(response.body.error.code).toBe("DRONE_NOT_LOADABLE");
+    expect(response.body.error.details).toEqual({
+      serialNumber: "LOAD-001", state, allowedStates: ["IDLE", "LOADING", "LOADED"],
+      batteryCapacity: 100, minimumBatteryCapacity: 25,
+      weightLimit: 500, loadedWeight: 0, remainingCapacity: 500, requestedWeight: 100,
+    });
     expect(await medications.count()).toBe(0);
     expect(await drones.findOneByOrFail({ id: drone.id })).toEqual(drone);
   });
@@ -84,6 +95,7 @@ describe("Medication loading", () => {
     });
     expect(response.status).toBe(409);
     expect(response.body.error.code).toBe("WEIGHT_LIMIT_EXCEEDED");
+    expect(response.body.error.details).toMatchObject({ weightLimit: 200, loadedWeight: 0, remainingCapacity: 200, requestedWeight: 201 });
     expect(await medications.count()).toBe(0);
     expect(await drones.findOneByOrFail({ id: drone.id })).toEqual(drone);
   });
@@ -94,6 +106,11 @@ describe("Medication loading", () => {
     const response = await request(app).post(endpoint).send({ medications: [{ ...medication, weight: 51 }] });
     expect(response.status).toBe(409);
     expect(response.body.error.code).toBe("WEIGHT_LIMIT_EXCEEDED");
+    expect(response.body.error.details).toEqual({
+      serialNumber: "LOAD-001", state: "LOADED", allowedStates: ["IDLE", "LOADING", "LOADED"],
+      batteryCapacity: 100, minimumBatteryCapacity: 25,
+      weightLimit: 500, loadedWeight: 450, remainingCapacity: 50, requestedWeight: 51,
+    });
     expect(await medications.sum("weight", { droneId: drone.id })).toBe(450);
     expect(await medications.count()).toBe(1);
   });
@@ -111,6 +128,7 @@ describe("Medication loading", () => {
     const response = await request(app).post(endpoint).send({ medications: [medication, { ...medication, ...overrides }] });
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(Array.isArray(response.body.error.details)).toBe(true);
     expect(await medications.count()).toBe(0);
     expect(await drones.findOneByOrFail({ id: drone.id })).toEqual(drone);
   });
@@ -176,6 +194,9 @@ describe("Medication loading", () => {
     ]);
     expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
     expect(responses.find((response) => response.status === 409)?.body.error.code).toBe("WEIGHT_LIMIT_EXCEEDED");
+    expect(responses.find((response) => response.status === 409)?.body.error.details).toMatchObject({
+      state: "LOADED", loadedWeight: 300, remainingCapacity: 200, requestedWeight: 300,
+    });
     expect(await medications.countBy({ droneId: drone.id })).toBe(1);
     expect(await medications.sum("weight", { droneId: drone.id })).toBe(300);
     expect((await drones.findOneByOrFail({ id: drone.id })).state).toBe("LOADED");

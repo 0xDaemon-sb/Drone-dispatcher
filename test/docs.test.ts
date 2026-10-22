@@ -85,4 +85,18 @@ describe("API documentation", () => {
     };
     visit(openApiDocument);
   });
+
+  it("documents loading conflict context and preserves validation detail arrays", () => {
+    const schemas = openApiDocument.components.schemas;
+    expect(schemas.Error).toMatchObject({ properties: { error: { properties: {
+      details: { anyOf: [{ type: "array" }, { type: "object" }] },
+    } } } });
+    expect(schemas.LoadingConflict).toMatchObject({ properties: { error: { required: ["code", "message", "details"] } } });
+    const examples = openApiDocument.components.responses.LoadingConflict.content["application/json"].examples;
+    for (const example of Object.values(examples)) {
+      expect(Object.keys(example.value.error.details).sort()).toEqual([...(schemas.LoadingConflictDetails.required ?? [])].sort());
+      expect(example.value.error.details.remainingCapacity)
+        .toBe(example.value.error.details.weightLimit - example.value.error.details.loadedWeight);
+    }
+  });
 });
