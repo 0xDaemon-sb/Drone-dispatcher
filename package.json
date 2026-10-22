@@ -15,14 +15,23 @@
     "lint": "eslint .",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
+    "test:integration": "jest --runInBand --testMatch '**/*.integration.ts'",
+    "db:migrate": "tsx src/database/migrate.ts",
+    "db:revert": "tsx src/database/migrate.ts revert",
+    "db:seed": "tsx src/database/seed.ts",
+    "db:migrate:production": "node dist/database/migrate.js",
+    "db:seed:production": "node dist/database/seed.js",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
     "dotenv": "^18.0.8",
     "express": "^5.3.0",
     "helmet": "^8.3.0",
+    "pg": "^8.23.1",
     "pino": "^10.4.0",
     "pino-http": "^11.0.0",
+    "reflect-metadata": "^0.2.2",
+    "typeorm": "^1.1.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {

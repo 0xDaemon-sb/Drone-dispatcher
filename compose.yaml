@@ -14,6 +14,10 @@ services:
       database:
         condition: service_healthy
     init: true
+    command:
+      - sh
+      - -c
+      - node dist/database/migrate.js && node dist/database/seed.js && exec node dist/server.js
 
   database:
     image: postgres:17-alpine
