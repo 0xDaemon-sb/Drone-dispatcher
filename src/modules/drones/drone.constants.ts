@@ -1,0 +1,1 @@
+export const MINIMUM_BATTERY_CAPACITY = 25;

@@ -3,12 +3,12 @@ import type { DataSource } from "typeorm";
 import type { DroneState } from "../../database/entities/drone.js";
 import { HttpError } from "../../lib/http-error.js";
 import { createBatteryAuditRepository } from "./battery-audit.repository.js";
+import { MINIMUM_BATTERY_CAPACITY } from "./drone.constants.js";
 import { createDroneRepository, isDuplicateSerialNumberError } from "./drone.repository.js";
 import type { BatteryAuditQuery, MedicationInput, RegisterDroneInput } from "./drone.schemas.js";
 import { createMedicationRepository } from "./medication.repository.js";
 
 const loadableStates: DroneState[] = ["IDLE", "LOADING", "LOADED"];
-const minimumBatteryCapacity = 25;
 
 export const createDroneService = (database: DataSource) => {
   const drones = createDroneRepository(database.manager);
@@ -64,7 +64,7 @@ export const createDroneService = (database: DataSource) => {
           state: drone.state,
           allowedStates: loadableStates,
           batteryCapacity: drone.batteryCapacity,
-          minimumBatteryCapacity,
+          minimumBatteryCapacity: MINIMUM_BATTERY_CAPACITY,
           weightLimit: drone.weightLimit,
           loadedWeight,
           remainingCapacity: Math.max(0, drone.weightLimit - loadedWeight),
@@ -74,8 +74,8 @@ export const createDroneService = (database: DataSource) => {
         if (!loadableStates.includes(drone.state)) {
           throw new HttpError(409, "DRONE_NOT_LOADABLE", "The drone cannot be loaded in its current state.", details);
         }
-        if (drone.batteryCapacity < minimumBatteryCapacity) {
-          throw new HttpError(409, "INSUFFICIENT_BATTERY", "The drone needs at least 25% battery to load medications.", details);
+        if (drone.batteryCapacity < MINIMUM_BATTERY_CAPACITY) {
+          throw new HttpError(409, "INSUFFICIENT_BATTERY", `The drone needs at least ${MINIMUM_BATTERY_CAPACITY}% battery to load medications.`, details);
         }
 
         if (loadedWeight + incomingWeight > drone.weightLimit) {
@@ -89,7 +89,7 @@ export const createDroneService = (database: DataSource) => {
     },
 
     getAvailable() {
-      return drones.findAvailable(loadableStates, minimumBatteryCapacity);
+      return drones.findAvailable(loadableStates, MINIMUM_BATTERY_CAPACITY);
     },
   };
 };

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { droneStates } from "../database/entities/drone.js";
+import { MINIMUM_BATTERY_CAPACITY } from "../modules/drones/drone.constants.js";
 import {
   batteryAuditQuerySchema,
   droneParamsSchema,
@@ -46,7 +47,7 @@ const loadingConflictDetailsSchema = z.strictObject({
   state: z.enum(droneStates),
   allowedStates: z.array(z.enum(droneStates)),
   batteryCapacity: registerDroneSchema.shape.batteryCapacity,
-  minimumBatteryCapacity: z.literal(25),
+  minimumBatteryCapacity: z.literal(MINIMUM_BATTERY_CAPACITY),
   weightLimit: registerDroneSchema.shape.weightLimit,
   loadedWeight: z.number().int().min(0).describe("Current payload in grams."),
   remainingCapacity: z.number().int().min(0).describe("Remaining payload capacity in grams, clamped to zero."),
@@ -54,7 +55,7 @@ const loadingConflictDetailsSchema = z.strictObject({
 });
 const loadingConflictDetailsExample = {
   serialNumber: "BLU-001", state: "LOADED", allowedStates: ["IDLE", "LOADING", "LOADED"],
-  batteryCapacity: 100, minimumBatteryCapacity: 25,
+  batteryCapacity: 100, minimumBatteryCapacity: MINIMUM_BATTERY_CAPACITY,
   weightLimit: 200, loadedWeight: 150, remainingCapacity: 50, requestedWeight: 100,
 };
 
@@ -117,7 +118,7 @@ export const openApiDocument = {
       InternalError: errorResponse("Unexpected server failure. Failed loading batches are rolled back.", "INTERNAL_SERVER_ERROR", "An unexpected error occurred."),
       DuplicateDrone: errorResponse("Serial numbers are unique, including during concurrent registrations.", "DRONE_ALREADY_EXISTS", "A drone with this serial number already exists."),
       LoadingConflict: {
-        ...jsonResponse("DRONE_NOT_LOADABLE: state is ineligible; INSUFFICIENT_BATTERY: battery is below 25%; WEIGHT_LIMIT_EXCEEDED: existing payload plus batch exceeds capacity. Details describe the drone and batch while holding the row lock; they may change after the response. Weights are grams, battery values are percentages. Nothing is added on failure.", ref("LoadingConflict")),
+        ...jsonResponse(`DRONE_NOT_LOADABLE: state is ineligible; INSUFFICIENT_BATTERY: battery is below ${MINIMUM_BATTERY_CAPACITY}%; WEIGHT_LIMIT_EXCEEDED: existing payload plus batch exceeds capacity. Details describe the drone and batch while holding the row lock; they may change after the response. Weights are grams, battery values are percentages. Nothing is added on failure.`, ref("LoadingConflict")),
         content: {
           "application/json": {
             schema: ref("LoadingConflict"),
@@ -127,8 +128,8 @@ export const openApiDocument = {
                 details: { ...loadingConflictDetailsExample, state: "DELIVERING" },
               } } },
               battery: { value: { error: {
-                code: "INSUFFICIENT_BATTERY", message: "The drone needs at least 25% battery to load medications.",
-                details: { ...loadingConflictDetailsExample, batteryCapacity: 24 },
+                code: "INSUFFICIENT_BATTERY", message: `The drone needs at least ${MINIMUM_BATTERY_CAPACITY}% battery to load medications.`,
+                details: { ...loadingConflictDetailsExample, batteryCapacity: MINIMUM_BATTERY_CAPACITY - 1 },
               } } },
               weight: { value: { error: {
                 code: "WEIGHT_LIMIT_EXCEEDED", message: "The medication batch exceeds the drone's remaining capacity.",
@@ -165,7 +166,7 @@ export const openApiDocument = {
     "/api/v1/drones/available": {
       get: {
         tags: ["Drones"], operationId: "getAvailableDrones", summary: "Find drones available for loading",
-        description: "Returns IDLE, LOADING, or LOADED drones with battery at least 25% and remaining payload capacity. Sorted by serial number. This query does not reserve capacity; loading checks again under a row lock.",
+        description: `Returns IDLE, LOADING, or LOADED drones with battery at least ${MINIMUM_BATTERY_CAPACITY}% and remaining payload capacity. Sorted by serial number. This query does not reserve capacity; loading checks again under a row lock.`,
         responses: { "200": jsonResponse("Eligible drones, or an empty array.", arrayOf("Drone"), [droneExample]), "500": errorRef("InternalError") },
       },
     },
@@ -191,7 +192,7 @@ export const openApiDocument = {
       },
       post: {
         tags: ["Medications"], operationId: "loadMedications", summary: "Load a medication batch atomically",
-        description: "Requires a non-empty batch, state IDLE/LOADING/LOADED, and battery at least 25%. Existing payload plus the entire batch must fit; exact capacity is accepted. The transaction locks the drone, inserts the whole batch, and sets LOADED. Each item is one package; codes may repeat. Additional item/body fields are rejected. Retries create new packages; this operation is not idempotent.",
+        description: `Requires a non-empty batch, state IDLE/LOADING/LOADED, and battery at least ${MINIMUM_BATTERY_CAPACITY}%. Existing payload plus the entire batch must fit; exact capacity is accepted. The transaction locks the drone, inserts the whole batch, and sets LOADED. Each item is one package; codes may repeat. Additional item/body fields are rejected. Retries create new packages; this operation is not idempotent.`,
         requestBody: {
           required: true,
           content: { "application/json": { schema: ref("LoadMedications"), example: { medications: [medicationExample] } } },
