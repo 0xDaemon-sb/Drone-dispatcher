@@ -18,11 +18,11 @@ export const batteryAuditQuerySchema = z.strictObject({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-const medicationInputSchema = z.strictObject({
+export const medicationInputSchema = z.strictObject({
   name: z.string().regex(/^[A-Za-z0-9_-]+$/),
   weight: z.number().int().positive(),
   code: z.string().regex(/^[A-Z0-9_]+$/),
-  image: z.url({ protocol: /^https?$/ }),
+  image: z.url({ protocol: /^https?$/ }).describe("HTTP or HTTPS URL of the medication case image. Base64 data URLs are not accepted."),
 });
 
 export const loadMedicationsSchema = z.strictObject({

@@ -26,6 +26,8 @@ npm run dev
 
 The service listens on `http://localhost:3000` by default.
 
+Open `http://localhost:3000/` for Swagger UI. It documents every API endpoint with request/response examples, validation rules, and error codes. Use **Try it out** to send requests to the same server; registration and loading calls persist real changes. The OpenAPI 3.0 specification is available at `http://localhost:3000/openapi.json` and can also be imported into Postman. Request definitions are generated from the existing Zod validators; no separate schema generator or annotation tool is required.
+
 ```bash
 curl http://localhost:3000/health
 ```
@@ -141,6 +143,7 @@ The supplied local user needs `CREATEDB` permission (the Compose user has it). E
 src/
   config/       Environment parsing and validation
   database/     TypeORM schemas, migrations, seed, and connection setup
+  docs/         OpenAPI specification and examples
   jobs/         Background battery audit task
   lib/          Shared infrastructure
   middleware/   Express middleware and error handling
