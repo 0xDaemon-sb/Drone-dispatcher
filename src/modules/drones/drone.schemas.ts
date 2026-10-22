@@ -13,4 +13,16 @@ export const registerDroneSchema = z.strictObject({
 
 export const droneParamsSchema = z.object({ serialNumber });
 
+const medicationInputSchema = z.strictObject({
+  name: z.string().regex(/^[A-Za-z0-9_-]+$/),
+  weight: z.number().int().positive(),
+  code: z.string().regex(/^[A-Z0-9_]+$/),
+  image: z.url({ protocol: /^https?$/ }),
+});
+
+export const loadMedicationsSchema = z.strictObject({
+  medications: z.array(medicationInputSchema).min(1),
+});
+
 export type RegisterDroneInput = z.infer<typeof registerDroneSchema>;
+export type MedicationInput = z.infer<typeof medicationInputSchema>;

@@ -1,9 +1,11 @@
 import { QueryFailedError, type DataSource } from "typeorm";
 
-import { droneSchema } from "../../database/entities/drone.js";
+import { droneSchema, type DroneState } from "../../database/entities/drone.js";
 import { medicationSchema } from "../../database/entities/medication.js";
 import { HttpError } from "../../lib/http-error.js";
-import type { RegisterDroneInput } from "./drone.schemas.js";
+import type { MedicationInput, RegisterDroneInput } from "./drone.schemas.js";
+
+const loadableStates: DroneState[] = ["IDLE", "LOADING", "LOADED"];
 
 export const createDroneService = (database: DataSource) => {
   const drones = database.getRepository(droneSchema);
@@ -41,9 +43,39 @@ export const createDroneService = (database: DataSource) => {
       return medications.find({ where: { droneId: drone.id }, order: { createdAt: "ASC", id: "ASC" } });
     },
 
+    async loadMedications(serialNumber: string, items: MedicationInput[]) {
+      return database.transaction("READ COMMITTED", async (manager) => {
+        const transactionDrones = manager.getRepository(droneSchema);
+        const transactionMedications = manager.getRepository(medicationSchema);
+
+        // Serialize loads for this drone before reading its current payload.
+        const drone = await transactionDrones.findOne({
+          where: { serialNumber },
+          lock: { mode: "pessimistic_write" },
+        });
+        if (!drone) throw new HttpError(404, "DRONE_NOT_FOUND", "Drone not found.");
+        if (!loadableStates.includes(drone.state)) {
+          throw new HttpError(409, "DRONE_NOT_LOADABLE", "The drone cannot be loaded in its current state.");
+        }
+        if (drone.batteryCapacity < 25) {
+          throw new HttpError(409, "INSUFFICIENT_BATTERY", "The drone needs at least 25% battery to load medications.");
+        }
+
+        const loadedWeight = await transactionMedications.sum("weight", { droneId: drone.id }) ?? 0;
+        const incomingWeight = items.reduce((total, item) => total + item.weight, 0);
+        if (loadedWeight + incomingWeight > drone.weightLimit) {
+          throw new HttpError(409, "WEIGHT_LIMIT_EXCEEDED", "The medication batch exceeds the drone's remaining capacity.");
+        }
+
+        const loaded = await transactionMedications.save(items.map((item) => ({ ...item, droneId: drone.id })));
+        await transactionDrones.update(drone.id, { state: "LOADED" });
+        return loaded;
+      });
+    },
+
     async getAvailable() {
       return drones.createQueryBuilder("drone")
-        .where("drone.state IN (:...states)", { states: ["IDLE", "LOADING", "LOADED"] })
+        .where("drone.state IN (:...states)", { states: loadableStates })
         .andWhere("drone.batteryCapacity >= :minimumBattery", { minimumBattery: 25 })
         .andWhere((query) => {
           const loadedWeight = query.subQuery()

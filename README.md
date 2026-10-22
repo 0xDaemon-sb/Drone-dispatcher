@@ -4,7 +4,7 @@ A REST API for registering medication-delivery drones, loading medication, query
 
 ## Current status
 
-The Express service connects to PostgreSQL using TypeORM and supports drone registration, battery queries, loaded medication queries, and loading availability. Versioned migrations define the schema, and an idempotent seed provides the initial fleet. Transactional medication loading and the battery scheduler are the next implementation slices.
+The Express service connects to PostgreSQL using TypeORM and supports drone registration, transactional medication loading, battery queries, loaded medication queries, and loading availability. Versioned migrations define the schema, and an idempotent seed provides the initial fleet. 
 
 ## Prerequisites
 
@@ -42,6 +42,7 @@ The API connects to PostgreSQL and checks for pending migrations before opening 
 | GET | `/api/v1/drones/available` | `200` with an array of eligible drones |
 | GET | `/api/v1/drones/:serialNumber/battery` | `200` with `serialNumber` and `batteryCapacity` |
 | GET | `/api/v1/drones/:serialNumber/medications` | `200` with an array of loaded medication items |
+| POST | `/api/v1/drones/:serialNumber/medications` | `201` with an array of newly loaded medication items |
 
 Register a drone:
 
@@ -53,9 +54,23 @@ curl -X POST http://localhost:3000/api/v1/drones \
 
 Registration requires all four fields. The model must be `Lightweight`, `Middleweight`, `Cruiserweight`, or `Heavyweight`; weight limit is an integer from 1 to 500 grams; battery is an integer from 0 to 100. Serial numbers are trimmed, must contain 1 to 100 characters, and are unique and case-sensitive. Additional fields, including `state` and `id`, are rejected. New drones always start in `IDLE`. The ten seeded drones are initial data, not a registration cap.
 
-Availability means state `IDLE`, `LOADING`, or `LOADED`, battery at least 25%, and the sum of loaded medication weights strictly below the drone's weight limit. This allows adding another batch before delivery. Results are sorted by serial number; an availability query is informational and does not reserve capacity. The loading endpoint will recheck these conditions inside a transaction.
+Availability means state `IDLE`, `LOADING`, or `LOADED`, battery at least 25%, and the sum of loaded medication weights strictly below the drone's weight limit. This allows adding another batch before delivery. Results are sorted by serial number; an availability query is informational and does not reserve capacity. The loading endpoint rechecks these conditions inside a transaction.
 
 An empty registered drone returns `[]` for medications. Battery and medication queries for an unknown serial return `404` with code `DRONE_NOT_FOUND`. Duplicate registrations return `409` with code `DRONE_ALREADY_EXISTS`, including under concurrent requests. Invalid input returns `400` with code `VALIDATION_ERROR` and validation details. Errors share the JSON structure `{"error":{"code":"...","message":"..."}}`; the response header `x-request-id` correlates each request with its logs.
+
+Load a medication batch:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/drones/CUSTOM-001/medications \
+  -H 'Content-Type: application/json' \
+  -d '{"medications":[{"name":"Paracetamol_500","weight":50,"code":"PARA_500","image":"https://example.com/medications/paracetamol.png"}]}'
+```
+
+The body requires a non-empty `medications` array. Each item requires `name` (ASCII letters, digits, hyphen, underscore), `code` (uppercase ASCII letters, digits, underscore), a positive integer `weight` in grams, and an HTTP/HTTPS image URL. Additional fields are rejected. URLs are stored; this service does not fetch or host image files. Each item represents one medication package, so codes may repeat.
+
+Loading uses a PostgreSQL transaction at `READ COMMITTED` isolation and locks the drone row before reading its current payload. It accepts `IDLE`, `LOADING`, or `LOADED` at battery 25% or higher; existing payload plus the entire batch must fit, including an exact-capacity load. All items are inserted and the state becomes `LOADED` together. A rejected or failed batch leaves existing payload and drone state unchanged. Concurrent loads for the same drone are serialized by the row lock. The response contains only the new items; GET medications returns all loaded items.
+
+Loading returns `404 DRONE_NOT_FOUND` for an unknown drone, `409 DRONE_NOT_LOADABLE` for an ineligible state, `409 INSUFFICIENT_BATTERY` for battery below 25%, and `409 WEIGHT_LIMIT_EXCEEDED` for insufficient remaining capacity. Invalid batches return `400 VALIDATION_ERROR` before any database writes.
 
 ## Run with Docker
 
@@ -87,7 +102,7 @@ After `npm run build`, the compiled equivalents are `npm run db:migrate:producti
 
 The seed inserts 10 IDLE drones (`BLU-001` through `BLU-010`), covering all models and battery levels including 24% and 25%, plus three unassigned medication items. Stable UUIDs and conflict-safe inserts make reruns preserve changed batteries and loaded items. Medication `image` values are HTTP/HTTPS URLs stored as text. The seed uses illustrative `example.com` URLs, not hosted pictures; real medication-case image URLs belong in client input. A data migration converts the previous base64 seed placeholders while preserving custom images. Audit history starts empty and will be populated by the scheduler.
 
-Weights use integer grams; battery readings use integer percentages. PostgreSQL enforces serial uniqueness and length, model/state enums, positive weights, a maximum drone limit of 500g, battery ranges, medication name/code formats, and valid drone references. A LOADING drone must have at least 25% battery. The aggregate payload weight rule will be enforced transactionally by the loading service in the next slice.
+Weights use integer grams; battery readings use integer percentages. PostgreSQL enforces serial uniqueness and length, model/state enums, positive weights, a maximum drone limit of 500g, battery ranges, medication name/code formats, and valid drone references. A LOADING drone must have at least 25% battery. The loading service enforces the aggregate payload weight rule transactionally.
 
 ## Quality checks
 
@@ -103,7 +118,7 @@ Database integration tests run separately against real PostgreSQL:
 TEST_DATABASE_URL=postgresql://blusalt:blusalt@localhost:5432/blusalt npm run test:integration
 ```
 
-The supplied local user needs `CREATEDB` permission (the Compose user has it). Each integration suite creates a uniquely named temporary database and deletes only that database afterward. Tests verify persistence, migrations, seed idempotency, request validation, concurrent registration conflicts, medication ownership, and availability filtering without changing development data.
+The supplied local user needs `CREATEDB` permission (the Compose user has it). Each integration suite creates a uniquely named temporary database and deletes only that database afterward. Tests verify persistence, migrations, seed idempotency, request validation, concurrent registration conflicts, medication ownership, availability filtering, batch rollback, and concurrent loading without changing development data.
 
 ## Project structure
 
