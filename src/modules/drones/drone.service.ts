@@ -1,20 +1,22 @@
-import { QueryFailedError, type DataSource } from "typeorm";
+import type { DataSource } from "typeorm";
 
-import { batteryAuditSchema } from "../../database/entities/battery-audit.js";
-import { droneSchema, type DroneState } from "../../database/entities/drone.js";
-import { medicationSchema } from "../../database/entities/medication.js";
+import type { DroneState } from "../../database/entities/drone.js";
 import { HttpError } from "../../lib/http-error.js";
+import { createBatteryAuditRepository } from "./battery-audit.repository.js";
+import { createDroneRepository, isDuplicateSerialNumberError } from "./drone.repository.js";
 import type { BatteryAuditQuery, MedicationInput, RegisterDroneInput } from "./drone.schemas.js";
+import { createMedicationRepository } from "./medication.repository.js";
 
 const loadableStates: DroneState[] = ["IDLE", "LOADING", "LOADED"];
 const minimumBatteryCapacity = 25;
 
 export const createDroneService = (database: DataSource) => {
-  const drones = database.getRepository(droneSchema);
-  const medications = database.getRepository(medicationSchema);
+  const drones = createDroneRepository(database.manager);
+  const medications = createMedicationRepository(database.manager);
+  const audits = createBatteryAuditRepository(database.manager);
 
   const findDrone = async (serialNumber: string) => {
-    const drone = await drones.findOneBy({ serialNumber });
+    const drone = await drones.findBySerialNumber(serialNumber);
     if (!drone) throw new HttpError(404, "DRONE_NOT_FOUND", "Drone not found.");
     return drone;
   };
@@ -22,13 +24,9 @@ export const createDroneService = (database: DataSource) => {
   return {
     async register(input: RegisterDroneInput) {
       try {
-        return await drones.save({ ...input, state: "IDLE" });
+        return await drones.create({ ...input, state: "IDLE" });
       } catch (error) {
-        if (
-          error instanceof QueryFailedError &&
-          "code" in error.driverError && error.driverError.code === "23505" &&
-          "constraint" in error.driverError && error.driverError.constraint === "UQ_drones_serial_number"
-        ) {
+        if (isDuplicateSerialNumberError(error)) {
           throw new HttpError(409, "DRONE_ALREADY_EXISTS", "A drone with this serial number already exists.");
         }
         throw error;
@@ -42,32 +40,24 @@ export const createDroneService = (database: DataSource) => {
 
     async getBatteryAudits(serialNumber: string, query: BatteryAuditQuery) {
       const drone = await findDrone(serialNumber);
-      return database.getRepository(batteryAuditSchema).find({
-        where: { droneId: drone.id },
-        order: { checkedAt: "DESC", id: "DESC" },
-        take: query.limit,
-        skip: query.offset,
-      });
+      return audits.findByDroneId(drone.id, query);
     },
 
     async getMedications(serialNumber: string) {
       const drone = await findDrone(serialNumber);
-      return medications.find({ where: { droneId: drone.id }, order: { createdAt: "ASC", id: "ASC" } });
+      return medications.findByDroneId(drone.id);
     },
 
     async loadMedications(serialNumber: string, items: MedicationInput[]) {
       return database.transaction("READ COMMITTED", async (manager) => {
-        const transactionDrones = manager.getRepository(droneSchema);
-        const transactionMedications = manager.getRepository(medicationSchema);
+        const transactionDrones = createDroneRepository(manager);
+        const transactionMedications = createMedicationRepository(manager);
 
         // Serialize loads for this drone before reading its current payload.
-        const drone = await transactionDrones.findOne({
-          where: { serialNumber },
-          lock: { mode: "pessimistic_write" },
-        });
+        const drone = await transactionDrones.findBySerialNumberForUpdate(serialNumber);
         if (!drone) throw new HttpError(404, "DRONE_NOT_FOUND", "Drone not found.");
 
-        const loadedWeight = await transactionMedications.sum("weight", { droneId: drone.id }) ?? 0;
+        const loadedWeight = await transactionMedications.getLoadedWeight(drone.id);
         const incomingWeight = items.reduce((total, item) => total + item.weight, 0);
         const details = {
           serialNumber: drone.serialNumber,
@@ -92,26 +82,14 @@ export const createDroneService = (database: DataSource) => {
           throw new HttpError(409, "WEIGHT_LIMIT_EXCEEDED", "The medication batch exceeds the drone's remaining capacity.", details);
         }
 
-        const loaded = await transactionMedications.save(items.map((item) => ({ ...item, droneId: drone.id })));
-        await transactionDrones.update(drone.id, { state: "LOADED" });
+        const loaded = await transactionMedications.createBatch(drone.id, items);
+        await transactionDrones.updateState(drone.id, "LOADED");
         return loaded;
       });
     },
 
-    async getAvailable() {
-      return drones.createQueryBuilder("drone")
-        .where("drone.state IN (:...states)", { states: loadableStates })
-        .andWhere("drone.batteryCapacity >= :minimumBattery", { minimumBattery: minimumBatteryCapacity })
-        .andWhere((query) => {
-          const loadedWeight = query.subQuery()
-            .select("COALESCE(SUM(medication.weight), 0)")
-            .from(medicationSchema, "medication")
-            .where("medication.droneId = drone.id")
-            .getQuery();
-          return `${loadedWeight} < drone.weightLimit`;
-        })
-        .orderBy("drone.serialNumber", "ASC")
-        .getMany();
+    getAvailable() {
+      return drones.findAvailable(loadableStates, minimumBatteryCapacity);
     },
   };
 };

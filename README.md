@@ -141,6 +141,8 @@ The supplied local user needs `CREATEDB` permission (the Compose user has it). E
 
 ## Project structure
 
+Routes map URLs to controllers, controllers validate HTTP input, services apply business rules and own transactions, and repositories contain database queries. Repositories are small factory functions that accept an `EntityManager`; normal queries use `dataSource.manager`, while loading creates repositories with the transaction's manager. Row locking, payload reads, medication inserts, and state updates therefore stay on the same transaction connection. Battery history and atomic snapshot queries also live in their repository. No generic repository base classes are used.
+
 ```text
 src/
   config/       Environment parsing and validation
@@ -149,7 +151,7 @@ src/
   jobs/         Background battery audit task
   lib/          Shared infrastructure
   middleware/   Express middleware and error handling
-  modules/drones/ Routes, controllers, validation schemas, and service logic
+  modules/drones/ Routes, controllers, schemas, services, and repositories
   routes/       HTTP route definitions
   app.ts        Express application composition
   server.ts     Process entry point and shutdown handling
