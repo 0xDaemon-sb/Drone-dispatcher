@@ -2,21 +2,191 @@
 
 A REST API for registering medication-delivery drones, loading medication, querying availability, and auditing battery levels.
 
-## Current status
+Built with Express, TypeScript, PostgreSQL, and TypeORM. It includes transactional medication loading, request IDs for debugging, Swagger documentation, Jest tests, and periodic battery snapshots. No drone hardware is required.
 
-The Express service connects to PostgreSQL using TypeORM and supports drone registration, transactional medication loading, battery queries, loaded medication queries, loading availability, and periodic battery audits. Versioned migrations define the schema, and an idempotent seed provides the initial fleet.
+## Contents
 
-## Prerequisites
+- [Quick start with Docker (recommended)](#quick-start-with-docker-recommended)
+- [Try the API](#try-the-api)
+- [Stop, restart, and update](#stop-restart-and-update)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [Local development](#local-development)
+- [Tests and quality checks](#tests-and-quality-checks)
+- [Drone API](#drone-api)
+- [Battery audits](#battery-audits)
+- [Database commands](#database-commands)
+- [Project structure](#project-structure)
+- [Contributing](#contributing)
 
-Choose either:
+## Quick start with Docker (recommended)
 
-- Docker Desktop with Docker Compose; or
-- Node.js 22 or newer and npm 10 or newer for host-based development.
+Docker runs both the API and its database in containers, so you do **not** need to install Node.js, npm, or PostgreSQL on your computer just to run the project.
 
-## Local development
+### 1. Install the prerequisites
+
+- [Git](https://git-scm.com/downloads), to download the source code. Alternatively, download and extract the repository ZIP from GitHub.
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), which includes Docker Compose. On Linux, Docker Engine with the Compose v2 plugin also works.
+
+Start Docker Desktop before continuing. Check that Docker and Compose are available:
+
+```bash
+docker --version
+docker compose version
+```
+
+### 2. Download the project
+
+```bash
+git clone https://github.com/0xDaemon-sb/Drone-dispatcher.git
+cd Drone-dispatcher
+```
+
+If you downloaded a ZIP, open a terminal in the extracted folder instead. Run all commands below from the project root: the folder containing `compose.yaml` and `package.json`.
+
+### 3. Create your local configuration
+
+On macOS, Linux, or Git Bash:
 
 ```bash
 cp .env.example .env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+This copies the example settings into a local `.env` file. Skip this step if you already have one; the default settings work for local use. Do not commit real credentials to Git.
+
+### 4. Build and start
+
+```bash
+docker compose up -d --build --wait
+```
+
+The first run may take a few minutes while Docker downloads images and installs dependencies inside the image. `-d` leaves the containers running in the background; `--wait` waits for them to become healthy.
+
+Compose automatically starts PostgreSQL, applies migrations (creates or updates the database tables), seeds missing example records, and starts the API. No separate npm, migration, or seed commands are needed for this path.
+
+### 5. Check that it works
+
+Open [Swagger UI](http://localhost:3000/) in your browser. This is the interactive API documentation, not a separate frontend application.
+
+You can also open the [health endpoint](http://localhost:3000/health) or run:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+Check container status with `docker compose ps`; both `api` and `database` should be healthy. `/health` confirms that the API process is responding, not that the database remains reachable continuously.
+
+## Try the API
+
+The database starts with ten example drones, `BLU-001` through `BLU-010`. Read the first drone's battery without creating any data:
+
+```bash
+curl http://localhost:3000/api/v1/drones/BLU-001/battery
+```
+
+On a fresh database, the response is:
+
+```json
+{"serialNumber":"BLU-001","batteryCapacity":100}
+```
+
+Then list drones eligible for loading:
+
+```bash
+curl http://localhost:3000/api/v1/drones/available
+```
+
+Prefer using your browser? In [Swagger UI](http://localhost:3000/), expand an endpoint, select **Try it out**, fill in any parameters, and select **Execute**. Registration and loading requests make real changes to your local database. See [Drone API](#drone-api) for complete examples and rules.
+
+The [OpenAPI specification](http://localhost:3000/openapi.json) can also be imported into Postman. On Windows PowerShell, use `curl.exe` instead of `curl` for these examples, or use Swagger UI; the multiline shell examples below use Bash syntax.
+
+## Stop, restart, and update
+
+Stop and remove the containers without deleting database data:
+
+```bash
+docker compose down
+```
+
+Start them again:
+
+```bash
+docker compose up -d --wait
+```
+
+After updating the source code or changing `.env`, rebuild and start:
+
+```bash
+docker compose up -d --build --wait
+```
+
+Database data lives in a named Docker volume and survives these commands. Seeding preserves existing records; restarting does not reset your changes. Do not add `--volumes` (or `-v`) to `docker compose down` unless you intend to permanently delete this stack's database data.
+
+View API logs:
+
+```bash
+docker compose logs -f api
+```
+
+Press `Ctrl+C` to stop following the logs; the containers keep running. To include database logs, omit `api`.
+
+## Configuration
+
+Defaults in `.env.example` are intended for local use, not a publicly exposed deployment.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | API port on your computer |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port on your computer |
+| `POSTGRES_DB` | `blusalt` | Database name |
+| `POSTGRES_USER` | `blusalt` | Local database user |
+| `POSTGRES_PASSWORD` | `blusalt` | Local database password |
+| `BATTERY_AUDIT_INTERVAL_MS` | `60000` | Time between battery snapshots, in milliseconds |
+| `DATABASE_URL` | See `.env.example` | Database connection URL for the API running directly on your computer |
+| `NODE_ENV` | `development` | Host development mode; Compose sets the API to `production` |
+| `LOG_LEVEL` | `info` | Host log level; Compose sets the API to `info` |
+
+Compose builds its own database connection URL using `database:5432` inside the Docker network; it does not use `.env`'s `DATABASE_URL`. For host development, update `DATABASE_URL` whenever you change `POSTGRES_PORT`, database credentials, or the database name.
+
+For example, if ports 3000 and 5432 are occupied, set `PORT=3001` and `POSTGRES_PORT=5433` in `.env`, then run the rebuild/start command above. Open `http://localhost:3001/` instead. For host development, also update the port in `DATABASE_URL` to `5433`.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| `docker` is not found, or `docker compose` is unavailable | Install Docker Desktop or Docker Engine with the Compose v2 plugin, then reopen your terminal. Use `docker compose`, not the older `docker-compose` command. |
+| Cannot connect to the Docker daemon | Start Docker Desktop, or ensure the Docker Engine service is running. |
+| A port is already allocated | Change `PORT` or `POSTGRES_PORT` in `.env` as described above. |
+| Startup fails or a container is unhealthy | Run `docker compose ps` and `docker compose logs --tail=100 api database`. The API cannot start until the database is ready and migrations succeed. |
+| Database authentication fails after changing credentials | PostgreSQL credentials are initialized only when the database volume is first created. Changing `.env` does not change an existing database user's password. Restore the previous settings, or deliberately update the existing database credentials; do not delete the volume to fix this if you need its data. |
+| Host API reports pending migrations | Run `npm run db:migrate` before `npm run dev`. Compose performs this step automatically. |
+| Battery history returns an empty array | The first snapshot runs after one audit interval (one minute by default). |
+
+If you need help, include the command you ran, relevant logs, your operating system, and Docker/Compose versions. Remove passwords and other secrets before sharing logs or configuration.
+
+## Local development
+
+Use this path when editing TypeScript and wanting the API to restart automatically as files change.
+
+You need [Node.js 22 or newer](https://nodejs.org/en/download), npm 10 or newer, **and** Docker Compose for the database. PostgreSQL 17 installed separately is also an option; create a database and user yourself, set `DATABASE_URL`, and skip the database container command.
+
+Download the project and create `.env` as shown in the quick start. If you previously started the full Docker stack, run `docker compose stop api` first so the container and host API do not compete for the same port. Only PostgreSQL needs to remain in Docker for this setup.
+
+Then run:
+
+```bash
 npm ci
 docker compose up -d --wait database
 npm run db:migrate
@@ -24,17 +194,55 @@ npm run db:seed
 npm run dev
 ```
 
-The service listens on `http://localhost:3000` by default.
+`npm ci` installs the exact dependency versions recorded in `package-lock.json`. Keep this terminal open; press `Ctrl+C` to stop the development API. Swagger is available at [http://localhost:3000/](http://localhost:3000/).
 
-Open `http://localhost:3000/` for Swagger UI. It documents every API endpoint with request/response examples, validation rules, and error codes. Use **Try it out** to send requests to the same server; registration and loading calls persist real changes. The OpenAPI 3.0 specification is available at `http://localhost:3000/openapi.json` and can also be imported into Postman. Request definitions are generated from the existing Zod validators; no separate schema generator or annotation tool is required.
+To run the compiled application instead of the development watcher:
 
 ```bash
-curl http://localhost:3000/health
+npm run build
+npm start
 ```
 
-`DATABASE_URL` configures the host process connection. If you change `POSTGRES_PORT`, database credentials, or the database name in `.env`, update `DATABASE_URL` to match. Compose constructs its own connection URL using the internal `database:5432` address. Container credentials default to `blusalt` for local development.
+Apply migrations and seed data first as above. The API connects to PostgreSQL and checks for pending migrations before opening its HTTP port. Startup fails if the database is unavailable or migrations are pending. Shutdown drains HTTP requests before closing the connection pool.
 
-The API connects to PostgreSQL and checks for pending migrations before opening its HTTP port. Startup fails if the database is unavailable or migrations are pending. Shutdown drains HTTP requests before closing the connection pool. `/health` is a process liveness endpoint, not a continuous database readiness probe.
+## Tests and quality checks
+
+Tests use Jest. Install the host development dependencies with `npm ci` first; Node.js and npm are required for these commands even if you run the application in Docker. The runtime Docker image does not include test tooling.
+
+Run unit and HTTP tests (no running database required):
+
+```bash
+npm test
+```
+
+Run linting, TypeScript checking, the same tests, and a production build:
+
+```bash
+npm run check
+```
+
+Database integration tests are separate and are **not** included in `npm run check`. They test the API against real PostgreSQL. Start the database and provide a test connection URL:
+
+```bash
+docker compose up -d --wait database
+```
+
+On macOS, Linux, or Git Bash (using the default database settings):
+
+```bash
+TEST_DATABASE_URL=postgresql://blusalt:blusalt@localhost:5432/blusalt npm run test:integration
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://blusalt:blusalt@localhost:5432/blusalt"
+npm run test:integration
+```
+
+Adjust this URL if you changed the database settings. Use a local development database, never a production connection. The supplied user needs `CREATEDB` permission (the Compose user has it). Each integration suite creates a uniquely named temporary database and deletes only that database afterward, without changing development data.
+
+Integration tests cover persistence, migrations, seed idempotency, request validation, concurrent registration conflicts, medication ownership, availability filtering, batch rollback, concurrent loading, and battery audit snapshots and history. Scheduler tests use fake timers to verify intervals, overlap prevention, failure recovery, and shutdown without real waits.
 
 ## Drone API
 
@@ -91,25 +299,9 @@ curl 'http://localhost:3000/api/v1/drones/BLU-001/battery-audits?limit=50&offset
 
 The response is an array of records with `id`, `droneId`, `batteryCapacity`, `state`, and `checkedAt`. Entries are sorted by `checkedAt` descending, then `id` descending for timestamp ties. `limit` defaults to 50 and must be from 1 to 100; `offset` defaults to zero and must be a non-negative integer. Invalid query parameters return `400 VALIDATION_ERROR`. A known drone without history returns `[]`; an unknown drone returns `404 DRONE_NOT_FOUND`.
 
-## Run with Docker
-
-Build and start the API and PostgreSQL:
-
-```bash
-docker compose up --build
-```
-
-The API is available at `http://localhost:3000`, and PostgreSQL is available at `localhost:5432`. Both ports can be overridden through `.env`.
-
-Stop the containers without deleting database data:
-
-```bash
-docker compose down
-```
-
-The API image uses a multi-stage build and runs as the unprivileged `node` user. Both services include health checks. Compose waits for PostgreSQL to become healthy, applies pending migrations, seeds missing fixture records, and starts the API. The Compose bootstrap is intended for this single-instance local challenge environment; standalone image deployments should run migrations as a separate deployment step.
-
 ## Database commands
+
+These commands require the host development dependencies and a configured `DATABASE_URL`. Normal Docker startup already migrates and seeds automatically.
 
 ```bash
 npm run db:migrate       # Apply pending migrations
@@ -117,27 +309,13 @@ npm run db:seed          # Insert missing fixtures, preserving existing records
 npm run db:revert        # Undo the latest migration
 ```
 
+Reverting a migration can remove tables and data; use it only when you understand what the latest migration undoes.
+
 After `npm run build`, the compiled equivalents are `npm run db:migrate:production` and `npm run db:seed:production`. Automatic schema synchronization is disabled; schema changes must be captured in migrations.
 
 The seed inserts 10 IDLE drones (`BLU-001` through `BLU-010`), covering all models and battery levels including 24% and 25%, plus three unassigned medication items. Stable UUIDs and conflict-safe inserts make reruns preserve changed batteries and loaded items. Medication `image` values are HTTP/HTTPS URLs stored as text. The seed uses illustrative `example.com` URLs, not hosted pictures; real medication-case image URLs belong in client input. A data migration converts the previous base64 seed placeholders while preserving custom images. Audit history starts empty and will be populated by the scheduler.
 
 Weights use integer grams; battery readings use integer percentages. PostgreSQL enforces serial uniqueness and length, model/state enums, positive weights, a maximum drone limit of 500g, battery ranges, medication name/code formats, and valid drone references. A LOADING drone must have at least 25% battery. The loading service enforces the aggregate payload weight rule transactionally.
-
-## Quality checks
-
-```bash
-npm run check
-```
-
-This runs linting, TypeScript checking, tests, and a production build.
-
-Database integration tests run separately against real PostgreSQL:
-
-```bash
-TEST_DATABASE_URL=postgresql://blusalt:blusalt@localhost:5432/blusalt npm run test:integration
-```
-
-The supplied local user needs `CREATEDB` permission (the Compose user has it). Each integration suite creates a uniquely named temporary database and deletes only that database afterward. Tests verify persistence, migrations, seed idempotency, request validation, concurrent registration conflicts, medication ownership, availability filtering, batch rollback, concurrent loading, and battery audit snapshots and history without changing development data. Scheduler tests use fake timers to verify intervals, overlap prevention, failure recovery, and shutdown without real waits.
 
 ## Project structure
 
@@ -159,3 +337,20 @@ test/           HTTP and integration tests
 compose.yaml    Local API and PostgreSQL stack
 Dockerfile      Production API image
 ```
+
+The Docker image uses a multi-stage build and runs as the unprivileged `node` user. Both services include health checks. The Compose bootstrap is intended for single-instance local use; standalone image deployments should run migrations as a separate deployment step.
+
+Swagger uses OpenAPI 3.0. Request definitions are generated from the existing Zod validators, so no separate schema generator or annotation tool is required.
+
+## Contributing
+
+Bug reports, documentation improvements, and focused pull requests are welcome. For a code contribution:
+
+1. Fork the repository on GitHub and clone your fork.
+2. Create a branch for your change: `git switch -c describe-your-change`.
+3. Follow the [local development](#local-development) setup.
+4. Keep changes focused, add or update tests, and update documentation when behavior changes.
+5. Run `npm run check`; also run integration tests when changing database or API behavior.
+6. Open a pull request explaining the change and how you tested it.
+
+For bug reports, include reproduction steps, expected and actual behavior, and relevant logs with secrets removed.
