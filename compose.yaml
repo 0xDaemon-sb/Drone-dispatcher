@@ -7,6 +7,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       LOG_LEVEL: info
+      BATTERY_AUDIT_INTERVAL_MS: ${BATTERY_AUDIT_INTERVAL_MS:-60000}
       DATABASE_URL: postgresql://${POSTGRES_USER:-blusalt}:${POSTGRES_PASSWORD:-blusalt}@database:5432/${POSTGRES_DB:-blusalt}
     ports:
       - "${PORT:-3000}:3000"

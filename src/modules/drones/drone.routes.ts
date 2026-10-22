@@ -11,6 +11,7 @@ export const createDroneRouter = (database: DataSource) => {
   router.post("/", controller.register);
   router.get("/available", controller.getAvailable);
   router.get("/:serialNumber/battery", controller.getBattery);
+  router.get("/:serialNumber/battery-audits", controller.getBatteryAudits);
   router.get("/:serialNumber/medications", controller.getMedications);
   router.post("/:serialNumber/medications", controller.loadMedications);
 

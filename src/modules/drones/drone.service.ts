@@ -1,9 +1,10 @@
 import { QueryFailedError, type DataSource } from "typeorm";
 
+import { batteryAuditSchema } from "../../database/entities/battery-audit.js";
 import { droneSchema, type DroneState } from "../../database/entities/drone.js";
 import { medicationSchema } from "../../database/entities/medication.js";
 import { HttpError } from "../../lib/http-error.js";
-import type { MedicationInput, RegisterDroneInput } from "./drone.schemas.js";
+import type { BatteryAuditQuery, MedicationInput, RegisterDroneInput } from "./drone.schemas.js";
 
 const loadableStates: DroneState[] = ["IDLE", "LOADING", "LOADED"];
 
@@ -36,6 +37,16 @@ export const createDroneService = (database: DataSource) => {
     async getBattery(serialNumber: string) {
       const drone = await findDrone(serialNumber);
       return { serialNumber: drone.serialNumber, batteryCapacity: drone.batteryCapacity };
+    },
+
+    async getBatteryAudits(serialNumber: string, query: BatteryAuditQuery) {
+      const drone = await findDrone(serialNumber);
+      return database.getRepository(batteryAuditSchema).find({
+        where: { droneId: drone.id },
+        order: { checkedAt: "DESC", id: "DESC" },
+        take: query.limit,
+        skip: query.offset,
+      });
     },
 
     async getMedications(serialNumber: string) {

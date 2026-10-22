@@ -4,7 +4,7 @@ A REST API for registering medication-delivery drones, loading medication, query
 
 ## Current status
 
-The Express service connects to PostgreSQL using TypeORM and supports drone registration, transactional medication loading, battery queries, loaded medication queries, and loading availability. Versioned migrations define the schema, and an idempotent seed provides the initial fleet. 
+The Express service connects to PostgreSQL using TypeORM and supports drone registration, transactional medication loading, battery queries, loaded medication queries, loading availability, and periodic battery audits. Versioned migrations define the schema, and an idempotent seed provides the initial fleet.
 
 ## Prerequisites
 
@@ -41,6 +41,7 @@ The API connects to PostgreSQL and checks for pending migrations before opening 
 | POST | `/api/v1/drones` | `201` with the registered drone |
 | GET | `/api/v1/drones/available` | `200` with an array of eligible drones |
 | GET | `/api/v1/drones/:serialNumber/battery` | `200` with `serialNumber` and `batteryCapacity` |
+| GET | `/api/v1/drones/:serialNumber/battery-audits` | `200` with a page of audit records, newest first |
 | GET | `/api/v1/drones/:serialNumber/medications` | `200` with an array of loaded medication items |
 | POST | `/api/v1/drones/:serialNumber/medications` | `201` with an array of newly loaded medication items |
 
@@ -71,6 +72,20 @@ The body requires a non-empty `medications` array. Each item requires `name` (AS
 Loading uses a PostgreSQL transaction at `READ COMMITTED` isolation and locks the drone row before reading its current payload. It accepts `IDLE`, `LOADING`, or `LOADED` at battery 25% or higher; existing payload plus the entire batch must fit, including an exact-capacity load. All items are inserted and the state becomes `LOADED` together. A rejected or failed batch leaves existing payload and drone state unchanged. Concurrent loads for the same drone are serialized by the row lock. The response contains only the new items; GET medications returns all loaded items.
 
 Loading returns `404 DRONE_NOT_FOUND` for an unknown drone, `409 DRONE_NOT_LOADABLE` for an ineligible state, `409 INSUFFICIENT_BATTERY` for battery below 25%, and `409 WEIGHT_LIMIT_EXCEEDED` for insufficient remaining capacity. Invalid batches return `400 VALIDATION_ERROR` before any database writes.
+
+## Battery audits
+
+The API starts a background task after it connects to PostgreSQL and opens its HTTP port. Set `BATTERY_AUDIT_INTERVAL_MS` to an integer from 1,000 to 2,147,483,647 milliseconds; the default is 60,000 (one minute). Compose forwards this setting from `.env`. The first audit runs after one interval, and later ticks are skipped while a prior audit is still running. This overlap guard applies within one API process; the local stack runs a single API instance.
+
+Each run snapshots every drone's stored battery percentage and state in one atomic `INSERT ... SELECT`, with a shared database timestamp. An empty fleet creates no records. A failed batch leaves no partial history, logs an error, and is retried at the next scheduled tick. Successful runs are silent to keep development logs minimal. Hardware communication is out of scope, so the task records stored readings without simulating battery drain. On shutdown, the timer is cancelled and any active audit finishes before the database pool closes, subject to the service's ten-second shutdown deadline.
+
+Retrieve history:
+
+```bash
+curl 'http://localhost:3000/api/v1/drones/BLU-001/battery-audits?limit=50&offset=0'
+```
+
+The response is an array of records with `id`, `droneId`, `batteryCapacity`, `state`, and `checkedAt`. Entries are sorted by `checkedAt` descending, then `id` descending for timestamp ties. `limit` defaults to 50 and must be from 1 to 100; `offset` defaults to zero and must be a non-negative integer. Invalid query parameters return `400 VALIDATION_ERROR`. A known drone without history returns `[]`; an unknown drone returns `404 DRONE_NOT_FOUND`.
 
 ## Run with Docker
 
@@ -118,7 +133,7 @@ Database integration tests run separately against real PostgreSQL:
 TEST_DATABASE_URL=postgresql://blusalt:blusalt@localhost:5432/blusalt npm run test:integration
 ```
 
-The supplied local user needs `CREATEDB` permission (the Compose user has it). Each integration suite creates a uniquely named temporary database and deletes only that database afterward. Tests verify persistence, migrations, seed idempotency, request validation, concurrent registration conflicts, medication ownership, availability filtering, batch rollback, and concurrent loading without changing development data.
+The supplied local user needs `CREATEDB` permission (the Compose user has it). Each integration suite creates a uniquely named temporary database and deletes only that database afterward. Tests verify persistence, migrations, seed idempotency, request validation, concurrent registration conflicts, medication ownership, availability filtering, batch rollback, concurrent loading, and battery audit snapshots and history without changing development data. Scheduler tests use fake timers to verify intervals, overlap prevention, failure recovery, and shutdown without real waits.
 
 ## Project structure
 
@@ -126,6 +141,7 @@ The supplied local user needs `CREATEDB` permission (the Compose user has it). E
 src/
   config/       Environment parsing and validation
   database/     TypeORM schemas, migrations, seed, and connection setup
+  jobs/         Background battery audit task
   lib/          Shared infrastructure
   middleware/   Express middleware and error handling
   modules/drones/ Routes, controllers, validation schemas, and service logic

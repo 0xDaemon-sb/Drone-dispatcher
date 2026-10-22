@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 
-import { droneParamsSchema, loadMedicationsSchema, registerDroneSchema } from "./drone.schemas.js";
+import { batteryAuditQuerySchema, droneParamsSchema, loadMedicationsSchema, registerDroneSchema } from "./drone.schemas.js";
 import type { DroneService } from "./drone.service.js";
 
 export const createDroneController = (service: DroneService) => ({
@@ -13,6 +13,12 @@ export const createDroneController = (service: DroneService) => ({
   async getBattery(request: Request, response: Response) {
     const { serialNumber } = droneParamsSchema.parse(request.params);
     response.json(await service.getBattery(serialNumber));
+  },
+
+  async getBatteryAudits(request: Request, response: Response) {
+    const { serialNumber } = droneParamsSchema.parse(request.params);
+    const query = batteryAuditQuerySchema.parse(request.query);
+    response.json(await service.getBatteryAudits(serialNumber, query));
   },
 
   async getMedications(request: Request, response: Response) {
